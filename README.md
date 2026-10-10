@@ -187,3 +187,62 @@ git diff 84d9f0c HEAD --stat -- src/test/java/com/universidad/refactoringu11/inv
 ```
 
 que no muestra ningún cambio.
+
+## Parte 2 — Acoplamiento entre paquetes
+
+### Diagnóstico: ciclo entre `inventario` y `reportes`
+Al agregar el módulo de reportes, `InventarioService` empezó a
+importar `ReporteBajoStockService` para avisarle del bajo stock, y
+`ReporteBajoStockService` ya importaba `InventarioService` para
+consultar los productos:
+
+```
+            importa ReporteBajoStockService
+   ┌─────────────────────────────────────────────┐
+   │                                             ▼
+┌──────────────┐                          ┌──────────────┐
+│  inventario  │                          │   reportes   │
+└──────────────┘                          └──────────────┘
+   ▲                                             │
+   └─────────────────────────────────────────────┘
+      importa InventarioService y Producto
+```
+
+El proyecto compila y las 20 pruebas de la Parte 1 siguen en verde,
+así que nada avisa del problema. Lo detecta la prueba de arquitectura
+`ArquitecturaPaquetesTest`, que en este punto falla:
+
+```
+$ mvn test -Dtest=ArquitecturaPaquetesTest
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+Architecture Violation [Priority: MEDIUM] - Rule 'slices matching
+'com.universidad.refactoringu11.(*)..' should be free of cycles' was violated (1 times):
+Cycle detected: Slice inventario ->
+                Slice reportes ->
+                Slice inventario
+  1. Dependencies of Slice inventario
+    - Field <...inventario.InventarioService.reporteBajoStockService> has type
+      <...reportes.ReporteBajoStockService>
+    - Method <...InventarioService.resultadoSegunStockMinimo(Producto)> calls method
+      <...reportes.ReporteBajoStockService.generarReporte()>
+  2. Dependencies of Slice reportes
+    - Constructor <...reportes.ReporteBajoStockService.<init>(InventarioService)> has
+      parameter of type <...inventario.InventarioService>
+    - Method <...ReporteBajoStockService.generarReporte()> calls method
+      <...inventario.InventarioService.productosBajoStockMinimo()>
+```
+
+Hay una segunda evidencia que las pruebas tampoco muestran, porque
+ninguna levanta el contexto de Spring: con este ciclo la aplicación no
+arranca.
+
+```
+$ mvn spring-boot:run
+APPLICATION FAILED TO START
+The dependencies of some of the beans in the application context form a cycle:
+┌─────┐
+|  inventarioService
+↑     ↓
+|  reporteBajoStockService
+└─────┘
+```
