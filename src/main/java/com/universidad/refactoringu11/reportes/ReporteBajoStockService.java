@@ -1,19 +1,28 @@
 package com.universidad.refactoringu11.reportes;
 
 import com.universidad.refactoringu11.inventario.InventarioService;
+import com.universidad.refactoringu11.inventario.NotificadorBajoStock;
 import com.universidad.refactoringu11.inventario.Producto;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
-public class ReporteBajoStockService {
+public class ReporteBajoStockService implements NotificadorBajoStock {
 
     private final InventarioService inventarioService;
+    private final Map<Long, Integer> reordenPorProducto = new LinkedHashMap<>();
 
     public ReporteBajoStockService(InventarioService inventarioService) {
         this.inventarioService = inventarioService;
+    }
+
+    @Override
+    public void notificar(Producto producto, int cantidadReorden) {
+        reordenPorProducto.put(producto.getId(), cantidadReorden);
     }
 
     public String generarReporte() {
@@ -27,7 +36,9 @@ public class ReporteBajoStockService {
     }
 
     private String describir(Producto producto) {
-        return "- " + producto.getNombre() + ": stock " + producto.getStock()
+        String linea = "- " + producto.getNombre() + ": stock " + producto.getStock()
                 + " (minimo " + producto.getStockMinimo() + ")";
+        Integer cantidadReorden = reordenPorProducto.get(producto.getId());
+        return cantidadReorden == null ? linea : linea + ", reordenar " + cantidadReorden;
     }
 }
