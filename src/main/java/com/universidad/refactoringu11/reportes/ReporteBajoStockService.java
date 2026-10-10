@@ -3,6 +3,7 @@ package com.universidad.refactoringu11.reportes;
 import com.universidad.refactoringu11.inventario.InventarioService;
 import com.universidad.refactoringu11.inventario.NotificadorBajoStock;
 import com.universidad.refactoringu11.inventario.Producto;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
@@ -16,7 +17,7 @@ public class ReporteBajoStockService implements NotificadorBajoStock {
     private final InventarioService inventarioService;
     private final Map<Long, Integer> reordenPorProducto = new LinkedHashMap<>();
 
-    public ReporteBajoStockService(InventarioService inventarioService) {
+    public ReporteBajoStockService(@Lazy InventarioService inventarioService) {
         this.inventarioService = inventarioService;
     }
 
