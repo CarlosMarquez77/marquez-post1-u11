@@ -246,3 +246,148 @@ The dependencies of some of the beans in the application context form a cycle:
 |  reporteBajoStockService
 └─────┘
 ```
+
+### Solución: invertir la dependencia
+**Técnica: Extract Interface + inversión de dependencias (DIP).** Se
+extrajo la interfaz `NotificadorBajoStock` dentro del paquete
+`inventario`. `InventarioService` dejó de importar
+`ReporteBajoStockService` y solo conoce esa interfaz;
+`ReporteBajoStockService` la implementa desde `reportes`.
+
+```
+┌───────────────────────────────┐        ┌──────────────────────────┐
+│          inventario           │        │         reportes         │
+│                               │        │                          │
+│  InventarioService ──usa──┐   │        │                          │
+│                           ▼   │        │                          │
+│   «interface»                 │◀───────│  ReporteBajoStockService │
+│   NotificadorBajoStock        │implementa  (usa InventarioService │
+│                               │        │   y Producto)            │
+└───────────────────────────────┘        └──────────────────────────┘
+        una sola dirección: reportes ──▶ inventario
+```
+
+```
+$ mvn test -Dtest=ArquitecturaPaquetesTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+
+$ grep -rn "refactoringu11.reportes" src/main/java/com/universidad/refactoringu11/inventario
+(sin resultados)
+```
+
+| Paquete | Dependencias antes | Inestabilidad antes | Dependencias después | Inestabilidad después |
+|---------|--------------------|---------------------|----------------------|-----------------------|
+| `inventario` | entra 1, sale 1 | 0,5 | entra 1, sale 0 | 0 (estable) |
+| `reportes` | entra 1, sale 1 | 0,5 | entra 0, sale 1 | 1 (inestable) |
+
+Después del cambio la dependencia va del paquete inestable al
+estable, y el estable es el que contiene la abstracción.
+
+**Decisión de diseño 3 — `NotificadorBajoStock` vive en `inventario`,
+no en `reportes`.**
+
+- *Cuál es el paquete de mayor nivel.* `inventario` es el dominio:
+  tiene las reglas de stock, de mínimo y de reorden, y funciona sin
+  que exista ningún reporte. `reportes` es un consumidor: solo toma
+  datos del inventario y les da formato de texto. Por la regla de la
+  guía (sección 4.3), "los paquetes de infraestructura dependen de
+  dominio; dominio nunca depende de infraestructura", la flecha debe
+  ir de `reportes` hacia `inventario`.
+- *Por qué la ubicación decide la dirección.* Lo que invierte la
+  dependencia no es crear la interfaz, sino quién es su dueño. Con la
+  interfaz en `inventario`, el servicio la usa sin salir de su
+  paquete y es `reportes` quien importa para implementarla.
+- *Qué pasaría en `reportes`.* `InventarioService` tendría que
+  importar `reportes.NotificadorBajoStock`, y como la interfaz
+  necesita `Producto`, `reportes` seguiría importando `inventario`:
+  el ciclo quedaría igual, solo que pasando por una interfaz.
+- La interfaz expresa lo que el inventario necesita decir ("este
+  producto quedó bajo el mínimo"), no lo que el reporte sabe hacer.
+  Por eso mañana puede implementarla un envío de correo sin tocar
+  `inventario`.
+
+**Decisión de diseño 4 — `notificar(Producto, int cantidadReorden)`
+por evento, no `notificar(List<Producto>)` por lote.**
+
+- *Ventaja en este diseño.* El bajo stock se detecta dentro de
+  `actualizarInventario()`, que procesa un movimiento de un producto.
+  En ese momento ya se tienen el producto y la cantidad de reorden
+  calculada, así que avisar ahí no exige guardar nada ni decidir
+  cuándo se cierra un lote. El inventario no acumula estado para
+  otros y quien recibe el aviso decide qué hacer: en este caso
+  `ReporteBajoStockService` lo guarda y lo muestra en el siguiente
+  `generarReporte()`.
+- *Qué se perdería con el lote.* `InventarioService` necesitaría una
+  lista de pendientes y una regla de cuándo enviarla, que es una
+  responsabilidad nueva dentro del servicio que se acaba de limpiar.
+  Además, una lista de `Producto` no lleva la cantidad de reorden de
+  cada uno; habría que crear otro tipo para transportarla.
+- *Cuándo preferiría el lote.* En una carga masiva, por ejemplo un
+  inventario físico que actualiza cientos de productos, o si cada
+  aviso tuviera un costo externo (un correo o una llamada a otra
+  API): ahí conviene un solo aviso consolidado al final del proceso.
+
+### Un segundo ciclo que la prueba de arquitectura no ve
+Después de invertir la dependencia, `ArquitecturaPaquetesTest` pasó,
+pero `mvn spring-boot:run` siguió fallando con el mismo mensaje. El
+ciclo de paquetes (lo que el compilador ve) estaba resuelto, pero
+quedaba un ciclo de objetos en ejecución: Spring necesita un
+`NotificadorBajoStock` para terminar de armar `InventarioService`, y
+el único que existe es `ReporteBajoStockService`, que pide un
+`InventarioService` en su constructor.
+
+Se resolvió con `@Lazy` en el parámetro del constructor de
+`ReporteBajoStockService`: Spring le entrega un proxy y busca el
+servicio real en la primera llamada. Se puso en `reportes` y no en
+`inventario` para que el dominio no cargue con un detalle del
+contenedor. `IntegracionInventarioReportesTest` (`@SpringBootTest`)
+comprueba que el contexto arranca y que una salida bajo el mínimo
+termina en el reporte:
+
+```
+Reporte de bajo stock:
+- Teclado: stock 3 (minimo 5), reordenar 12
+```
+
+ArchUnit analiza clases compiladas, así que no puede ver ese segundo
+ciclo. Para cubrirlo hace falta una prueba que levante el contexto.
+
+### Las pruebas de la Parte 1 siguen en verde sin modificarse
+
+```
+$ mvn test
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in com.universidad.refactoringu11.ArquitecturaPaquetesTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0 -- in com.universidad.refactoringu11.inventario.InventarioServiceTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0 -- in com.universidad.refactoringu11.inventario.ClasificadorProductoTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0 -- in com.universidad.refactoringu11.inventario.EtiquetadoProductoTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in com.universidad.refactoringu11.IntegracionInventarioReportesTest
+[INFO] Tests run: 22, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+
+$ git diff 84d9f0c HEAD --stat -- src/test/java/com/universidad/refactoringu11/inventario
+(sin cambios)
+```
+
+Las 20 pruebas de caracterización son las mismas que se escribieron
+antes del primer refactor. La reestructuración de paquetes no cambió
+ningún resultado.
+
+## Herramientas utilizadas
+- Java 17, Spring Boot 3.3, Apache Maven
+- JUnit 5, ArchUnit 1.3.0, JaCoCo y PMD CPD (medición)
+- Git, GitHub
+
+## Conclusiones
+Lo que más me sirvió de este laboratorio fue escribir las pruebas
+antes de tocar el código: al preparar los casos límite aparecieron
+dos comportamientos que yo habría "arreglado" sin darme cuenta
+durante el refactor, y eso ya no habría sido refactorizar. También vi
+que las herramientas ven cosas distintas: el detector de duplicados
+no encontró el switch repetido, las pruebas de negocio no notaron el
+ciclo entre paquetes, y la prueba de arquitectura no notó el ciclo
+que impedía arrancar la aplicación. Cada problema necesitó su propia
+evidencia. Sobre las técnicas, Extract Method y el polimorfismo en el
+enum resolvieron los smells sin agregar clases que hoy no hacen
+falta, y la inversión de dependencias dejó claro que lo importante no
+es crear una interfaz sino en qué paquete queda.
